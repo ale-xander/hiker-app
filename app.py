@@ -21,7 +21,7 @@ async def check_san_mateo(arrival_date, park_name):
         "Sam McDonald Park": "sam-mcdonald-park"
     }
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True) # Set to True for speed
+        browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         date_str = arrival_date.strftime("%m/%d/%Y")
         url = f"https://secure.itinio.com/sanmateo/{park_slugs[park_name]}?site_type_id=1&arrival={date_str}&nights=2"
@@ -34,7 +34,6 @@ async def check_san_mateo(arrival_date, park_name):
             
             for site in sites:
                 text = await site.inner_text()
-                # Clean up the text to just get the site name/number
                 site_name = text.split('\n')[0].strip() if text else "Available"
                 available_sites.append(site_name)
                 
@@ -45,10 +44,12 @@ async def check_san_mateo(arrival_date, park_name):
             await browser.close()
 
 # --- 3. SANTA CLARA DRIVER ---
+# --- 3. SANTA CLARA DRIVER ---
+# --- 3. SANTA CLARA DRIVER ---
+# --- 3. SANTA CLARA DRIVER ---
 async def check_santa_clara(arrival_date, park_name):
     async with async_playwright() as p:
-        # We can finally set headless=True now that the logic is bulletproof
-        browser = await p.chromium.launch(headless=True, slow_mo=300) 
+        browser = await p.chromium.launch(headless=False, slow_mo=300) 
         context = await browser.new_context()
         page = await context.new_page()
         
@@ -56,104 +57,145 @@ async def check_santa_clara(arrival_date, park_name):
         
         try:
             await page.goto(url, wait_until="domcontentloaded")
+            await asyncio.sleep(5) 
+
+            # 1. CLOSE MODAL
+            try:
+                await page.locator('.ui-dialog-titlebar-close').click(force=True, timeout=2000)
+                print("DEBUG: Closed alert modal.")
+            except:
+                pass 
+
+            # 2. SELECT PARK (By exact text, immune to the "Nights" bug)
+            print(f"DEBUG: Selecting Park: {park_name}...")
+            await page.evaluate(f"""(name) => {{
+                const selects = document.querySelectorAll('select');
+                for (let sel of selects) {{
+                    for (let opt of sel.options) {{
+                        if (opt.text.toUpperCase().includes(name.toUpperCase())) {{
+                            sel.value = opt.value;
+                            sel.dispatchEvent(new Event('change'));
+                            return;
+                        }}
+                    }}
+                }}
+            }}""", park_name)
+
+            # Wait for the ASP.NET server to process the park change
             await asyncio.sleep(4) 
 
-            # 1. KILL MODAL
-            await page.evaluate("document.querySelectorAll('.ui-dialog, .ui-widget-overlay').forEach(el => el.remove())")
-
-            # 2. SELECT PARK
-            park_values = {"Sanborn": "9", "Uvas Canyon Park": "10", "Mt Madonna Park": "6"}
-            val = park_values.get(park_name, "9")
-            await page.evaluate(f"""(v) => {{
-                const sel = Array.from(document.querySelectorAll('select')).find(s => 
-                    Array.from(s.options).some(o => o.value === v)
-                );
-                if (sel) {{ sel.value = v; sel.dispatchEvent(new Event('change')); }}
-            }}""", val)
-
-            await asyncio.sleep(3) 
-
-            # 3. SELECT TENT
+            # 3. SELECT TENT (By text)
+            print("DEBUG: Selecting Site Type: Tent...")
             await page.evaluate("""() => {
-                const sel = Array.from(document.querySelectorAll('select')).find(s => 
-                    Array.from(s.options).some(o => o.text.includes('Tent'))
-                );
-                if (sel) {
-                    const opt = Array.from(sel.options).find(o => o.text.includes('Tent'));
-                    sel.value = opt.value;
-                    sel.dispatchEvent(new Event('change'));
+                const selects = document.querySelectorAll('select');
+                for (let sel of selects) {
+                    for (let opt of sel.options) {
+                        if (opt.text.includes('Tent')) {
+                            sel.value = opt.value;
+                            sel.dispatchEvent(new Event('change'));
+                            return;
+                        }
+                    }
                 }
             }""")
             
-            await asyncio.sleep(2)
+            # Wait for the ASP.NET server to process the Tent change
+            await asyncio.sleep(4)
 
-            # 4. SYNCHRONIZED DATE INJECTION
+            # 4. INJECT ARRIVAL DATE
             arrival_str = arrival_date.strftime("%m-%d-%Y")
-            departure_date = arrival_date + timedelta(days=2)
-            departure_str = departure_date.strftime("%m-%d-%Y")
+            departure_str = (arrival_date + timedelta(days=2)).strftime("%m-%d-%Y")
             
-            date_args = {"arr": arrival_str, "dep": departure_str}
-
-            await page.evaluate("""(args) => {
-                const arrInput = document.getElementById('camping_arrive_date');
-                const depInput = document.getElementById('camping_depart_date');
-                
-                if (arrInput) {
-                    arrInput.value = args.arr;
-                    arrInput.dispatchEvent(new Event('change'));
+            print(f"DEBUG: Setting Arrival Date: {arrival_str}...")
+            await page.evaluate("""(arrArgs) => {
+                const aHidden = document.getElementById('camping_arrive_date');
+                if (aHidden) { 
+                    aHidden.value = arrArgs.date; 
+                    aHidden.dispatchEvent(new Event('change')); 
                 }
-                if (depInput) {
-                    depInput.value = args.dep;
-                    depInput.dispatchEvent(new Event('change'));
-                }
-                
-                const altArr = document.getElementById('Arrival_Date');
-                if (altArr) altArr.value = args.arr.replace(/-/g, '/');
-                const nights = document.getElementById('Nights');
-                if (nights) nights.value = '2';
-            }""", date_args)
+                const monthSpan = document.getElementById('camp_arrive_month');
+                const daySpan = document.getElementById('camp_arrive_day');
+                if (monthSpan) monthSpan.innerText = arrArgs.m;
+                if (daySpan) daySpan.innerText = arrArgs.d;
+            }""", {
+                "date": arrival_str, 
+                "m": arrival_date.strftime("%b"), 
+                "d": str(int(arrival_date.strftime("%d")))
+            })
 
-            # 5. CLICK SEARCH
-            await asyncio.sleep(1)
-            await page.click("button.BigBtn.AlphaBtn")
+            # Wait for date background validation
+            await asyncio.sleep(4)
+
+            # 5. INJECT DEPARTURE DATE & NIGHTS
+            print(f"DEBUG: Setting Departure Date: {departure_str}...")
+            await page.evaluate("""(depArgs) => {
+                const dHidden = document.getElementById('camping_depart_date');
+                if (dHidden) { 
+                    dHidden.value = depArgs.date; 
+                    dHidden.dispatchEvent(new Event('change')); 
+                }
+                const n = document.getElementById('res_nites');
+                if (n) n.innerText = '2';
+            }""", {"date": departure_str})
+
+            await asyncio.sleep(3)
+
+            # 6. CLICK SEARCH
+            print("DEBUG: Triggering Search...")
+            await page.evaluate("const btn = document.querySelector('button.BigBtn.AlphaBtn'); if(btn) btn.click();")
             
-            # 6. RESULTS EXTRACTION (The Upgrade)
+            # 7. TAB DETECTION & EXTRACTION (With ADA Filter)
+            print("DEBUG: Waiting for page to render results...")
             await asyncio.sleep(8) 
             
-            # We now return an Array of strings instead of a number
-            available_sites = await page.evaluate("""() => {
-                const cards = Array.from(document.querySelectorAll('#SiteCards .card-col'));
+            tab_locator = page.locator(".tab-allpark")
+            if await tab_locator.count() > 0:
+                print("DEBUG: Tabbed layout detected! Clicking 'All Park Areas'...")
+                await page.evaluate("const tab = document.querySelector('.tab-allpark'); if(tab) tab.click();")
+                await asyncio.sleep(3) 
+            
+            available_sites = await page.evaluate(r"""() => {
+                const cards = Array.from(document.querySelectorAll('.card-col'));
                 const sites = [];
                 
                 cards.forEach(card => {
-                    // Check if this specific card has an active Reserve button
-                    const btn = Array.from(card.querySelectorAll('button')).find(b => b.innerText.includes('Reserve') && b.style.display !== 'none');
+                    const btn = Array.from(card.querySelectorAll('button'))
+                                     .find(b => {
+                                         const txt = (b.textContent || "").toUpperCase();
+                                         return txt.includes('RESERVE') && b.style.display !== 'none';
+                                     });
                     
                     if (btn) {
-                        // Extract the site number from the ghost_title_lg span
-                        const titleEl = card.querySelector('.ghost_title_lg');
-                        if (titleEl) {
-                            const text = titleEl.innerText;
-                            // Uses regex to pull the number after 'Site:'
-                            const match = text.match(/Site:\\s*([A-Za-z0-9]+)/i);
-                            if (match) {
-                                sites.push(match[1]);
-                            } else {
-                                sites.push("Unknown Site");
-                            }
+                        const text = card.innerText || "";
+                        const match = text.match(/Site:\s*([^\n\r|]+)/i);
+                        
+                        let siteName = "";
+                        if (match && match[1]) {
+                            siteName = match[1].split('Area:')[0].split('Park:')[0].trim();
+                        } else {
+                            const ghost = card.querySelector('.ghost_title_lg');
+                            if (ghost) siteName = ghost.innerText.replace(/Site:/i, '').trim();
+                        }
+                        
+                        if (siteName && !siteName.toUpperCase().includes('ADA')) {
+                            sites.push(siteName);
                         }
                     }
                 });
-                return sites;
+                return [...new Set(sites)];
             }""")
             
+            print(f"DEBUG: Found {len(available_sites)} sites at {park_name}")
             return available_sites, url
 
         except Exception as e:
-            print(f"SCRAPER ERROR: {e}")
+            print(f"SCRAPER ERROR at {park_name}: {e}")
             return [], url
         finally:
             await browser.close()
+
+
+
 
 # --- 4. THE UI FRONTEND ---
 st.set_page_config(page_title="Hiker Radar", page_icon="🌲", layout="centered")
@@ -178,16 +220,11 @@ if st.button("🚀 Run Radar Scan", use_container_width=True, type="primary"):
             else:
                 sites_found, link = asyncio.run(check_santa_clara(selected_weekend, park))
             
-            # --- FRONT-END DISPLAY LOGIC ---
             if len(sites_found) > 0:
                 status.update(label=f"✅ Success at {park}!", state="complete", expanded=True)
                 st.success(f"### Found {len(sites_found)} sites at {park}")
-                
-                # Format the list of sites into nice Markdown 'Code' chips
                 site_chips = " ".join([f"` Site {site} `" for site in sites_found])
                 st.markdown(f"**Available Spots:**\n\n{site_chips}")
-                
-                # Booking button
                 st.link_button(f"🏕️ Jump to Booking Page", link)
                 st.divider()
             else:
