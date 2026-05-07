@@ -47,6 +47,8 @@ with st.sidebar:
         ["Waterfalls & Creeks", "Redwoods & Quiet", "Views & Sun"]
     )
 
+show_unverified = st.toggle("👀 Show Unverified Sites when filtering", value=False)
+
 active_target_tags = set()
 if "Multi-Family / Group" in group_filter: active_target_tags.update(["group-friendly", "family-hub"])
 if "Single Family" in group_filter: active_target_tags.update(["family-friendly", "kid-bike-loop"])
@@ -54,6 +56,14 @@ if "Solo / Couple" in group_filter: active_target_tags.update(["quieter-loop"])
 if "Waterfalls & Creeks" in vibe_filter: active_target_tags.update(["waterfall-hikes", "creekside"])
 if "Redwoods & Quiet" in vibe_filter: active_target_tags.update(["redwood-forest", "quieter-loop"])
 if "Views & Sun" in vibe_filter: active_target_tags.update(["view-potential", "partial-shade"])
+
+
+# --- INITIALIZE MEMORY VAULT ---
+# This tells Streamlit to remember our data even when the page reloads
+if "scraped_data" not in st.session_state:
+    st.session_state.scraped_data = {}
+if "has_run" not in st.session_state:
+    st.session_state.has_run = False
 
 # --- MAIN PAGE UI ---
 st.title("🌲 Campsite Radar Concierge")
@@ -74,7 +84,10 @@ with st.container(border=True):
                                      ["Sanborn", "Uvas Canyon Park", "Mt Madonna Park", "Memorial County Park", "Sam McDonald Park"],
                                      default=["Sanborn"])
 
+# --- THE SCRAPER BUTTON (Only runs once) ---
 if st.button("🚀 Run Radar Scan", use_container_width=True, type="primary"):
+    st.session_state.scraped_data = {} # Clear old memory
+    
     for park in target_parks:
         with st.status(f"📡 Scanning **{park}** backend...", expanded=True) as status:
             if "Memorial" in park or "McDonald" in park:
@@ -82,34 +95,63 @@ if st.button("🚀 Run Radar Scan", use_container_width=True, type="primary"):
             else:
                 sites_found, link = asyncio.run(check_santa_clara(selected_weekend, park))
             
-            if len(sites_found) > 0:
-                park_knowledge = CAMP_KNOWLEDGE.get(park, {})
-                approved_sites = []
-                for site in sites_found:
-                    site_data = park_knowledge.get(site)
-                    if not active_target_tags:
-                        approved_sites.append(site)
-                        continue
-                    if not site_data:
-                        continue
-                    site_tags = set(site_data.get("tags", []))
-                    if active_target_tags.intersection(site_tags):
-                        approved_sites.append(site)
+            # Save the raw results to the memory vault
+            st.session_state.scraped_data[park] = {
+                "sites": sites_found,
+                "link": link
+            }
+            status.update(label=f"✅ Securely cached data for {park}!", state="complete", expanded=False)
+            
+    st.session_state.has_run = True
 
-                if len(approved_sites) > 0:
-                    status.update(label=f"✅ Found {len(approved_sites)} matching sites at {park}!", state="complete", expanded=True)
-                    st.link_button(f"🏕️ Jump to Booking Page", link)
-                    st.divider()
+# --- THE FILTER & RENDER LOOP (Runs purely from memory) ---
+if st.session_state.has_run:
+    st.divider()
+    
+    for park, park_data in st.session_state.scraped_data.items():
+        sites_found = park_data["sites"]
+        link = park_data["link"]
+        
+        if len(sites_found) > 0:
+            park_knowledge = CAMP_KNOWLEDGE.get(park, {})
+            approved_sites = []
+            
+           # --- THE UPGRADED FILTER LOGIC ---
+            for site in sites_found:
+                clean_site = str(site).strip() # Kills hidden spaces!
+                site_data = park_knowledge.get(clean_site)
+                
+                # 1. If NO filters are active, show everything
+                if not active_target_tags:
+                    approved_sites.append(clean_site)
+                    continue
                     
-                    # --- RENDER FIGMA CARDS ---
-                    for site in approved_sites:
-                        site_data = park_knowledge.get(site)
-                        if not site_data:
-                            # Pass a minimal dict for unverified sites
-                            render_camp_card(site, {"vibe": "Researching..."}, is_unverified=True)
-                        else:
-                            render_camp_card(site, site_data)
-                else:
-                    status.update(label=f"❌ {park} has openings, but none matched your filters.", state="error", expanded=False)
+                # 2. If the site is UNVERIFIED (Not in your JSON)
+                if not site_data:
+                    if show_unverified:
+                        approved_sites.append(clean_site)
+                    continue
+                    
+                # 3. If the site is VETTED, check the tags
+                site_tags = set(site_data.get("tags", []))
+                
+                # Does the site share at least one tag with your active filters?
+                if active_target_tags.intersection(site_tags):
+                    approved_sites.append(clean_site)
+
+            # Render logic
+            if len(approved_sites) > 0:
+                st.success(f"### ✅ Found {len(approved_sites)} matching sites at {park}!")
+                st.link_button(f"🏕️ Jump to Booking Page", link)
+                
+                # Render Figma Cards
+                for site in approved_sites:
+                    site_data = park_knowledge.get(site)
+                    if not site_data:
+                        render_camp_card(site, {"vibe": "Researching..."}, is_unverified=True)
+                    else:
+                        render_camp_card(site, site_data)
             else:
-                status.update(label=f"❌ {park} is fully booked.", state="error", expanded=False)
+                st.error(f"❌ {park} has openings, but none matched your filters.")
+        else:
+            st.error(f"❌ {park} is fully booked.")
