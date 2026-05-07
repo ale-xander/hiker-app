@@ -199,30 +199,63 @@ async def check_santa_clara(arrival_date, park_name):
             await browser.close()
 
 
-# --- 4. THE UI FRONTEND ---
-st.set_page_config(page_title="Hiker Radar", page_icon="🌲", layout="centered")
+# --- 4. THE UI FRONTEND (The Concierge Update) ---
+st.set_page_config(page_title="Hiker Radar", page_icon="🌲", layout="wide") # Changed to wide for better cards
 
-st.title("🌲 Campsite Radar")
-st.markdown("Automatically bypass legacy booking systems to hunt down weekend availability.")
+# --- SIDEBAR FILTERS ---
+with st.sidebar:
+    st.header("🎯 Smart Filters")
+    st.markdown("Leave blank to see all available sites.")
+    
+    # Filter 1: Group Size
+    group_filter = st.multiselect(
+        "Who are you camping with?", 
+        ["Solo / Couple", "Single Family", "Multi-Family / Group"]
+    )
+    
+    # Filter 2: Setting / Vibe
+    vibe_filter = st.multiselect(
+        "Setting / Vibe", 
+        ["Waterfalls & Creeks", "Redwoods & Quiet", "Views & Sun"]
+    )
+
+# --- MAP UI SELECTIONS TO JSON TAGS ---
+# This converts what you click in the UI to the tags hidden in your camp_data
+active_target_tags = set()
+
+if "Multi-Family / Group" in group_filter:
+    active_target_tags.update(["group-friendly", "family-hub"])
+if "Single Family" in group_filter:
+    active_target_tags.update(["family-friendly", "kid-bike-loop"])
+if "Solo / Couple" in group_filter:
+    active_target_tags.update(["quieter-loop"]) # Assuming smaller parties prefer quiet
+
+if "Waterfalls & Creeks" in vibe_filter:
+    active_target_tags.update(["waterfall-hikes", "creekside"])
+if "Redwoods & Quiet" in vibe_filter:
+    active_target_tags.update(["redwood-forest", "quieter-loop"])
+if "Views & Sun" in vibe_filter:
+    active_target_tags.update(["view-potential", "partial-shade"])
+
+
+# --- MAIN PAGE UI ---
+st.title("🌲 Campsite Radar Concierge")
+st.markdown("Automatically hunt down weekend availability and match it to your vibe.")
 
 with st.container(border=True):
-    # Setup a 3-column layout to accommodate the new Month filter
     col_month, col_weekend, col_parks = st.columns([1, 1, 2])
     
     with col_month:
-        # 1. Month Picker
         month_options = get_upcoming_months(8)
         selected_month_label = st.selectbox("🗓️ Select Month", list(month_options.keys()))
         selected_month_date = month_options[selected_month_label]
         
     with col_weekend:
-        # 2. Weekend Picker (Dynamically updates based on Month)
         weekend_options = get_weekends_for_month(selected_month_date)
         selected_weekend_label = st.selectbox("📅 Select Weekend", list(weekend_options.keys()))
         selected_weekend = weekend_options[selected_weekend_label]
 
     with col_parks:
-        # 3. Park Selector
         target_parks = st.multiselect("📍 Select Parks", 
                                      ["Sanborn", "Uvas Canyon Park", "Mt Madonna Park", "Memorial County Park", "Sam McDonald Park"],
                                      default=["Sanborn"])
@@ -236,30 +269,59 @@ if st.button("🚀 Run Radar Scan", use_container_width=True, type="primary"):
                 sites_found, link = asyncio.run(check_santa_clara(selected_weekend, park))
             
             if len(sites_found) > 0:
-                status.update(label=f"✅ Success at {park}!", state="complete", expanded=True)
-                st.success(f"### Found {len(sites_found)} sites at {park}")
+                park_knowledge = CAMP_KNOWLEDGE.get(park, {})
                 
-                # --- THE PLUMBING TEST ---
-                st.write("### Raw Data Merge Test:")
-                
+                # --- APPLY FILTERS ---
+                approved_sites = []
                 for site in sites_found:
-                    # 1. Look up the park in our dictionary (fallback to empty dict if park isn't there)
-                    park_data = CAMP_KNOWLEDGE.get(park, {})
+                    site_data = park_knowledge.get(site)
                     
-                    # 2. Look up the specific site (fallback to a "Unknown" template if site isn't there)
-                    site_info = park_data.get(site, {
-                        "vibe": "Standard Site", 
-                        "pros": "No data available.", 
-                        "tags": ["unverified"]
-                    })
+                    # If we have no filters active, show everything
+                    if not active_target_tags:
+                        approved_sites.append(site)
+                        continue
+                        
+                    # If site is unverified but filters are ON, skip it (we can't verify if it matches)
+                    if not site_data:
+                        continue
+                        
+                    # Check if the site has ANY of the target tags
+                    site_tags = set(site_data.get("tags", []))
+                    if active_target_tags.intersection(site_tags):
+                        approved_sites.append(site)
+
+                # --- RENDER RESULTS ---
+                if len(approved_sites) > 0:
+                    status.update(label=f"✅ Found {len(approved_sites)} matching sites at {park}!", state="complete", expanded=True)
+                    st.link_button(f"🏕️ Jump to Booking Page", link)
+                    st.divider()
                     
-                    # 3. Print the raw dictionary to the screen to prove they linked
-                    st.write(f"**Site {site}**")
-                    st.json(site_info) # This is a great Streamlit tool for debugging data!
-                
-                st.link_button(f"🏕️ Jump to Booking Page", link)
-                st.divider()
+                    # Render the beautiful site cards
+                    for site in approved_sites:
+                        site_data = park_knowledge.get(site)
+                        
+                        if not site_data:
+                            # The "Unknown" Site Warning Box
+                            st.warning(f"### ⚠️ Site {site} is available!\n*This site is unverified. Research needed.*", icon="⚠️")
+                        else:
+                            # The Vetted Site Card
+                            with st.container(border=True):
+                                # Build the header with privacy rating (default to 3 if missing)
+                                privacy_stars = "🛡️" * site_data.get("privacy", 3)
+                                st.markdown(f"### Site {site}  |  {privacy_stars}")
+                                st.caption(f"**Vibe:** {site_data.get('vibe', 'Standard')}")
+                                
+                                # Pros & Cons columns
+                                col_pro, col_con = st.columns(2)
+                                with col_pro:
+                                    st.success(f"**Best For:** {site_data.get('best_for', 'General Camping')}\n\n**Pros:** {site_data.get('pros', 'N/A')}")
+                                with col_con:
+                                    st.error(f"**Cons:** {site_data.get('cons', 'N/A')}")
+                                
+                                # Render the tags as little code blocks at the bottom
+                                tags = site_data.get("tags", [])
+                                st.markdown(" ".join([f"`{t}`" for t in tags]))
+                else:
+                    status.update(label=f"❌ {park} has openings, but none matched your filters.", state="error", expanded=False)
             else:
                 status.update(label=f"❌ {park} is fully booked.", state="error", expanded=False)
-
-st.caption("MacBook Pro 2020 Intel • Python 3.14.4 • Radar v2.1")
