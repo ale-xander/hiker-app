@@ -49,13 +49,20 @@ with st.sidebar:
 
 show_unverified = st.toggle("👀 Show Unverified Sites when filtering", value=False)
 
+# --- THE PRECISION DATA MAPPING ---
 active_target_tags = set()
-if "Multi-Family / Group" in group_filter: active_target_tags.update(["group-friendly", "family-hub"])
-if "Single Family" in group_filter: active_target_tags.update(["family-friendly", "kid-bike-loop"])
-if "Solo / Couple" in group_filter: active_target_tags.update(["quieter-loop"])
-if "Waterfalls & Creeks" in vibe_filter: active_target_tags.update(["waterfall-hikes", "creekside"])
-if "Redwoods & Quiet" in vibe_filter: active_target_tags.update(["redwood-forest", "quieter-loop"])
-if "Views & Sun" in vibe_filter: active_target_tags.update(["view-potential", "partial-shade"])
+if "Multi-Family / Group" in group_filter:
+    active_target_tags.update(["group-friendly"])
+if "Single Family" in group_filter:
+    active_target_tags.update(["family-friendly", "best-all-around"])
+if "Solo / Couple" in group_filter:
+    active_target_tags.update(["semi-secluded", "premium", "best-for-privacy", "most-remote"])
+if "Waterfalls & Creeks" in vibe_filter:
+    active_target_tags.update(["near-creek", "waterfall-hikes"])
+if "Redwoods & Quiet" in vibe_filter:
+    active_target_tags.update(["semi-secluded", "upper-band", "upper-hill", "best-for-privacy", "moderate-privacy"])
+if "Views & Sun" in vibe_filter:
+    active_target_tags.update(["partial-shade", "loop-valley-view-1", "loop-valley-view-2"])
 
 
 # --- INITIALIZE MEMORY VAULT ---
